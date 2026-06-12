@@ -1,35 +1,62 @@
 name: CI
 
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
+on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+
+    environment: Labo3
+
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
 
-      - name: Creer fichier .env
+      - name: Nettoyer workspace
         run: |
-          echo "DB_HOST=127.0.0.1" >> .env
-          echo "DB_PORT=3306" >> .env
-          echo "DB_NAME=labo03_db" >> .env
-          echo "DB_USER=labo03" >> .env
-          echo "DB_PASS=labo03" >> .env
-          echo "REDIS_HOST=127.0.0.1" >> .env
-          echo "REDIS_PORT=6379" >> .env
-          echo "REDIS_DB=0" >> .env
+          sudo rm -rf ${{ github.workspace }}/* || true
+          sudo rm -rf ${{ github.workspace }}/.pytest_cache || true
 
-      - name: Run tests
-        working-directory: src
-        run: echo "Call pytest command here!"
+      - name: Checkout dépot
+        uses: actions/checkout@v4
+
+      - name: Créer fichier .env
+        run: |
+          echo "DB_HOST=${{ secrets.DB_HOST }}" >> .env
+          echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env
+          echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+          echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+          echo "DB_PASSWORD=${{ secrets.DB_PASSWORD }}" >> .env
+          echo "REDIS_HOST=${{ secrets.REDIS_HOST }}" >> .env
+          echo "REDIS_PORT=${{ secrets.REDIS_PORT }}" >> .env
+          echo "REDIS_DB=${{ secrets.REDIS_DB }}" >> .env
+          
+      - name: Démarrer le conteneur
+        run: |
+          docker network create labo03-network || true
+          sudo docker compose down -v || true
+          docker compose up -d --build
+
+      - name: Attendre MySQL
+        run: |
+          sleep 10
+          timeout=60
+          until docker compose exec -T mysql mysqladmin ping -h localhost -u root -proot --silent; do
+            echo "Waiting for MySQL..."
+            sleep 3
+            timeout=$((timeout - 3))
+            if [ $timeout -le 0 ]; then
+              echo "MySQL failed to start"
+              exit 1
+            fi
+          done
+          sleep 5
+
+      - name: Créer table stocks
+        run: |
+          docker compose exec -T mysql mysql -u root -proot labo03_db -e "CREATE TABLE IF NOT EXISTS stocks (product_id INT PRIMARY KEY, quantity INT NOT NULL DEFAULT 0, FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE RESTRICT);"
+
+      - name: Éxécuter les tests
+        run: docker compose exec -T store_manager pytest tests/ -v
+
+      - name: Cleanup
+        if: always()
+        run: docker compose down -v
