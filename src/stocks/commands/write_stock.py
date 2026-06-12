@@ -29,7 +29,15 @@ def set_stock_for_product(product_id, quantity):
             session.commit()
   
         r = get_redis_conn()
-        r.hset(f"stock:{product_id}", "quantity", quantity)
+        
+        product = session.query(Product).filter_by(id=product_id).first()
+        r.hset(f"stock:{product_id}", mapping={
+            "quantity": quantity,
+            "name": product.name if product else '',
+            "sku": product.sku if product else '',
+            "price": float(product.price) if product else 0
+        })
+
         return response_message
     except Exception as e:
         session.rollback()
